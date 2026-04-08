@@ -1,0 +1,25 @@
+# ============================================================
+# Adaptive Traffic Signal Control — RL Project
+# Requirements (no deep-learning frameworks required)
+# ============================================================
+
+# SUMO Python bindings — install SUMO separately from sumo-sim.org
+# sumo_rl requires SUMO to be installed and SUMO_HOME to be set.
+sumo-rl>=2.0.0
+
+# Gymnasium (OpenAI Gym successor) used by sumo-rl
+gymnasium>=0.28.0
+
+# Scientific computing — NO neural networks needed
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0           # softmax, statistics utilities
+
+# Visualisation
+matplotlib>=3.7.0
+
+# Progress bar for training loop
+tqdm>=4.65.0
+
+# Optional but helpful
+tabulate>=0.9.0          # formatted comparison tables

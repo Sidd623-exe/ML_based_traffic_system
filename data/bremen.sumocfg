@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- bremen.sumocfg — CN+ Dataset SUMO configuration
+     Generated for the ATSC-RL university project.
+     References:
+       - bremen.net.xml   : road network (copied from CN+_Dataset.net.xml)
+       - bremen.rou.xml   : vehicle routes (2022.05.24 17:00–18:00, busiest hour)
+       - bremen.add.xml   : additional elements (bus stops, copied from CN+_Dataset.add.xml)
+-->
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="bremen.net.xml"/>
+        <route-files value="bremen.rou.xml"/>
+        <additional-files value="bremen.add.xml"/>
+    </input>
+
+    <time>
+        <begin value="0"/>
+        <end value="3600"/>
+    </time>
+
+    <processing>
+        <ignore-route-errors value="true"/>
+    </processing>
+
+    <report>
+        <verbose value="false"/>
+        <no-step-log value="true"/>
+    </report>
+
+</configuration>
