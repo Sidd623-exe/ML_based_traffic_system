@@ -82,7 +82,10 @@ def _collect_metrics(env: SumoEnvironment, episodes: int) -> Dict[str, float]:
         step_w: List[float] = []
         step_d: List[float] = []
 
-        while not all(terminated.values()) and not all(truncated.values()):
+        max_steps = (_SIM_SECONDS // _DELTA_TIME) + 50
+        step = 0
+        while step < max_steps:
+            step += 1
             # For baselines: always pass action 0 (do not change phase), so
             # the SUMO TLS program defined in the net file takes full control.
             actions = {a: 0 for a in obs}
@@ -93,6 +96,13 @@ def _collect_metrics(env: SumoEnvironment, episodes: int) -> Dict[str, float]:
                 obs, _, dones, info = step_res
                 terminated = truncated = dones
 
+            done_all = (
+                terminated.get("__all__", False)
+                or truncated.get("__all__", False)
+                or all(terminated.get(a, False) for a in env.ts_ids)
+                or all(truncated.get(a, False) for a in env.ts_ids)
+            )
+
             if "system_total_stopped" in info:
                 step_q.append(float(info["system_total_stopped"]))
             if "system_mean_waiting_time" in info:
@@ -100,6 +110,9 @@ def _collect_metrics(env: SumoEnvironment, episodes: int) -> Dict[str, float]:
             if "system_mean_speed" in info:
                 spd = float(info["system_mean_speed"])
                 step_d.append(1.0 - min(spd / 13.9, 1.0))
+
+            if done_all:
+                break
 
         all_queues.append(np.mean(step_q) if step_q else 0.0)
         all_waits.append( np.mean(step_w) if step_w else 0.0)
@@ -146,6 +159,7 @@ def run_fixed_time(episodes: int = 10) -> Dict[str, float]:
         max_green=45,
         use_gui=False,
         sumo_warnings=False,
+        time_to_teleport=300,
         additional_sumo_cmd=f"-a {_ADD}",
     )
     results = _collect_metrics(env, episodes)
@@ -191,6 +205,7 @@ def run_actuated_tls(episodes: int = 10) -> Dict[str, float]:
         max_green=60,
         use_gui=False,
         sumo_warnings=False,
+        time_to_teleport=300,
         additional_sumo_cmd=f"-a {_ADD}",
     )
     results = _collect_metrics(env, episodes)

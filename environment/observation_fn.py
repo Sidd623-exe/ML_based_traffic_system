@@ -72,7 +72,11 @@ class CNPlusObservation(ObservationFunction):
         # self.ts.green_phases is populated in _build_phases(), which runs AFTER
         # observation_fn initialization in newer sumo_rl versions.
         # Use the standard TraCI method to get phase definitions:
-        logic = self.ts.sumo.trafficlight.getCompleteRedYellowGreenDefinition(self.ts.id)[0]
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            warnings.simplefilter("ignore", UserWarning)
+            logic = self.ts.sumo.trafficlight.getCompleteRedYellowGreenDefinition(self.ts.id)[0]
         self._num_phases: int = len(logic.getPhases())
 
     # ─────────────────────────────────────────────────────────────────────────

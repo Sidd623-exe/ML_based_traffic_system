@@ -74,7 +74,8 @@ class LiveDashboard:
 
         # Show the (empty) figure immediately so the window appears on launch
         plt.tight_layout()
-        plt.show()
+        if matplotlib.get_backend().lower() != "agg":
+            plt.show()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public update method — call once per episode
@@ -136,7 +137,11 @@ class LiveDashboard:
 
         # 3. Refresh layout and flush to screen
         plt.tight_layout()
-        plt.pause(0.01)   # tiny pause required by Matplotlib's event loop
+        if matplotlib.get_backend().lower() != "agg":
+            plt.pause(0.01)   # tiny pause required by Matplotlib's event loop
+        else:
+            self._fig.canvas.draw_idle()
+            self._fig.canvas.flush_events()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Persistence

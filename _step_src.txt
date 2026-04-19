@@ -1,0 +1,26 @@
+    def step(self, action: Union[dict, int]):
+        """Apply the action(s) and then step the simulation for delta_time seconds.
+
+        Args:
+            action (Union[dict, int]): action(s) to be applied to the environment.
+            If single_agent is True, action is an int, otherwise it expects a dict with keys corresponding to traffic signal ids.
+        """
+        # No action, follow fixed TL defined in self.phases
+        if self.fixed_ts or action is None or action == {}:
+            for _ in range(self.delta_time):
+                self._sumo_step()
+        else:
+            self._apply_actions(action)
+            self._run_steps()
+
+        observations = self._compute_observations()
+        rewards = self._compute_rewards()
+        dones = self._compute_dones()
+        terminated = False  # there are no 'terminal' states in this environment
+        truncated = dones["__all__"]  # episode ends when sim_step >= max_steps
+        info = self._compute_info()
+
+        if self.single_agent:
+            return observations[self.ts_ids[0]], rewards[self.ts_ids[0]], terminated, truncated, info
+        else:
+            return observations, rewards, dones, info

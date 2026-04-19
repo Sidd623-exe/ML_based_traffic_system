@@ -1,0 +1,2 @@
+    def _sumo_step(self):
+        self.sumo.simulationStep()

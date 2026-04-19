@@ -19,6 +19,13 @@ from __future__ import annotations
 
 import sys
 import os
+import io
+
+# Fix Windows cp1252 encoding — this file uses Unicode box-drawing characters
+# (─, —, •, etc.) in print statements that cp1252 cannot encode.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 if not os.environ.get("SUMO_HOME") or not os.path.exists(os.environ["SUMO_HOME"]):
     os.environ["SUMO_HOME"] = r"C:\Program Files (x86)\Eclipse\Sumo"
@@ -47,6 +54,14 @@ except ImportError as exc:
     sys.exit(f"ERROR: sumo_rl not installed.\n{exc}")
 
 
+def _safe_close(env) -> None:
+    """Close SUMO env, suppressing WinError 10038 socket noise on Windows."""
+    try:
+        env.close()
+    except OSError:
+        pass
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
@@ -54,6 +69,12 @@ except ImportError as exc:
 _NET:   str = str(_PROJECT / "data" / "bremen.net.xml")
 _ROUTE: str = str(_PROJECT / "data" / "bremen.rou.xml")
 _ADD:   str = str(_PROJECT / "data" / "bremen.add.xml")  # bus stops
+_SIM_SECONDS: int = 3600
+_DELTA_TIME:  int = 5
+# Safety cap: max steps before we force-break the episode loop.
+# sumo_rl may not set terminated/truncated correctly for all agents,
+# which causes infinite loops without this guard.
+_MAX_STEPS: int = (_SIM_SECONDS // _DELTA_TIME) + 50
 
 # Feature names must match the order produced by CNPlusObservation.__call__()
 # — 4 queue lanes, 4 wait lanes, 4 phase one-hots, 1 time-since-change
@@ -85,10 +106,11 @@ def _make_env() -> SumoEnvironment:
         delta_time=5,
         min_green=10,
         max_green=60,
-        use_gui=False,
+        use_gui=True,
         reward_fn=custom_reward,
         observation_class=CNPlusObservation,
         sumo_warnings=False,
+        time_to_teleport=300,
         additional_sumo_cmd=f"-a {_ADD}",
     )
 
@@ -131,7 +153,7 @@ def evaluate_agent() -> Dict[str, float]:
     # Identify the first agent for explain_decision() calls
     first_agent: str = env.ts_ids[0] if env.ts_ids else ""
 
-    while not all(terminated.values()) and not all(truncated.values()):
+    while step < _MAX_STEPS:
         step += 1
         actions = agents.act(obs)
 
@@ -151,6 +173,16 @@ def evaluate_agent() -> Dict[str, float]:
             next_obs, _, dones, info = step_res
             terminated = truncated = dones
 
+        # Check episode termination via __all__ key or all-agents-done
+        done_all = (
+            terminated.get("__all__", False)
+            or truncated.get("__all__", False)
+            or all(terminated.get(a, False) for a in env.ts_ids)
+            or all(truncated.get(a, False) for a in env.ts_ids)
+        )
+        if done_all:
+            break
+
         if "system_total_stopped"    in info: ep_q.append(float(info["system_total_stopped"]))
         if "system_mean_waiting_time" in info: ep_w.append(float(info["system_mean_waiting_time"]))
         if "system_mean_speed"        in info:
@@ -159,7 +191,7 @@ def evaluate_agent() -> Dict[str, float]:
 
         obs = next_obs
 
-    env.close()
+    _safe_close(env)
     return {
         "queue": float(np.mean(ep_q)) if ep_q else 0.0,
         "wait":  float(np.mean(ep_w)) if ep_w else 0.0,
@@ -178,7 +210,9 @@ def _episode_series(env: SumoEnvironment) -> Tuple[List, List, List]:
     terminated = {a: False for a in env.ts_ids}
     truncated  = {a: False for a in env.ts_ids}
     q, w, d = [], [], []
-    while not all(terminated.values()) and not all(truncated.values()):
+    step = 0
+    while step < _MAX_STEPS:
+        step += 1
         actions = {a: 0 for a in obs}   # baseline: never change phase
         step_res = env.step(actions)
         if len(step_res) == 5:
@@ -186,6 +220,14 @@ def _episode_series(env: SumoEnvironment) -> Tuple[List, List, List]:
         else:
             obs, _, dones, info = step_res
             terminated = truncated = dones
+        done_all = (
+            terminated.get("__all__", False)
+            or truncated.get("__all__", False)
+            or all(terminated.get(a, False) for a in env.ts_ids)
+            or all(truncated.get(a, False) for a in env.ts_ids)
+        )
+        if done_all:
+            break
         if "system_total_stopped"     in info: q.append(float(info["system_total_stopped"]))
         if "system_mean_waiting_time" in info: w.append(float(info["system_mean_waiting_time"]))
         if "system_mean_speed"        in info:
@@ -206,7 +248,9 @@ def _agent_episode_series() -> Tuple[List, List, List]:
     truncated  = {a: False for a in env.ts_ids}
     q, w, d = [], [], []
 
-    while not all(terminated.values()) and not all(truncated.values()):
+    step = 0
+    while step < _MAX_STEPS:
+        step += 1
         actions = agents.act(obs)
         step_res = env.step(actions)
         if len(step_res) == 5:
@@ -214,6 +258,14 @@ def _agent_episode_series() -> Tuple[List, List, List]:
         else:
             next_obs, _, dones, info = step_res
             terminated = truncated = dones
+        done_all = (
+            terminated.get("__all__", False)
+            or truncated.get("__all__", False)
+            or all(terminated.get(a, False) for a in env.ts_ids)
+            or all(truncated.get(a, False) for a in env.ts_ids)
+        )
+        if done_all:
+            break
         if "system_total_stopped"     in info: q.append(float(info["system_total_stopped"]))
         if "system_mean_waiting_time" in info: w.append(float(info["system_mean_waiting_time"]))
         if "system_mean_speed"        in info:
@@ -221,7 +273,7 @@ def _agent_episode_series() -> Tuple[List, List, List]:
             d.append(1.0 - min(spd / 13.9, 1.0))
         obs = next_obs
 
-    env.close()
+    _safe_close(env)
     return q, w, d
 
 
@@ -283,6 +335,91 @@ def plot_comparison(
     out_path: Path = _PROJECT / "results" / "comparison_plot.png"
     out_path.parent.mkdir(exist_ok=True)
     fig.savefig(str(out_path), dpi=150, bbox_inches="tight")
+    print(f"  Saved → {out_path}")
+    plt.close(fig)
+
+
+def plot_baseline_vs_model(
+    ft: Dict[str, float],
+    at: Dict[str, float],
+    ac: Dict[str, float],
+) -> None:
+    """
+    Generate and save a grouped bar chart comparing baselines vs our model.
+
+    Shows three metric groups (Queue, Wait, Delay) with three bars each
+    (Fixed Time, Actuated TLS, Linear AC) and annotates percentage improvement.
+
+    Saves:
+        results/baseline_vs_model.png
+    """
+    print("\n  Generating baseline vs model bar chart …")
+
+    metrics = ["Queue Length", "Wait Time (s)", "Delay"]
+    keys    = ["queue", "wait", "delay"]
+    ft_vals = [ft[k] for k in keys]
+    at_vals = [at[k] for k in keys]
+    ac_vals = [ac[k] for k in keys]
+
+    x = np.arange(len(metrics))
+    width = 0.22
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.set_facecolor("#16213e")
+
+    # Bar colours
+    c_ft = "#e94560"   # red-ish for Fixed Time
+    c_at = "#f5a623"   # amber for Actuated TLS
+    c_ac = "#0f9b58"   # green for our model
+
+    bars_ft = ax.bar(x - width, ft_vals, width, label="Fixed Time",
+                     color=c_ft, edgecolor="white", linewidth=0.5, zorder=3)
+    bars_at = ax.bar(x,         at_vals, width, label="Actuated TLS",
+                     color=c_at, edgecolor="white", linewidth=0.5, zorder=3)
+    bars_ac = ax.bar(x + width, ac_vals, width, label="Linear AC (ours)",
+                     color=c_ac, edgecolor="white", linewidth=0.5, zorder=3)
+
+    # Annotate values on bars
+    for bars in [bars_ft, bars_at, bars_ac]:
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2.0, h + 0.02 * max(ft_vals + at_vals + ac_vals),
+                    f"{h:.2f}", ha="center", va="bottom", fontsize=8,
+                    color="white", fontweight="bold")
+
+    # Percentage improvement annotations (our model vs best baseline)
+    for i, key in enumerate(keys):
+        best_baseline = min(ft[key], at[key])
+        if best_baseline > 0:
+            pct = ((best_baseline - ac[key]) / best_baseline) * 100
+            sign = "+" if pct < 0 else "-"
+            colour = "#4ecca3" if pct > 0 else "#ff6b6b"
+            label_text = f"{abs(pct):.1f}% {'better' if pct > 0 else 'worse'}"
+            y_pos = max(ft[key], at[key], ac[key]) + 0.08 * max(ft_vals + at_vals + ac_vals)
+            ax.annotate(label_text, xy=(x[i] + width, ac_vals[i]),
+                        xytext=(x[i] + width, y_pos),
+                        ha="center", fontsize=9, color=colour, fontweight="bold",
+                        arrowprops=dict(arrowstyle="->", color=colour, lw=1.5))
+
+    ax.set_title("Baseline vs Linear AC — Performance Comparison",
+                 fontsize=14, fontweight="bold", color="white", pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, fontsize=11, color="white")
+    ax.tick_params(axis="y", colors="white")
+    ax.set_ylabel("Metric Value", fontsize=11, color="white")
+    ax.legend(fontsize=10, loc="upper left", facecolor="#1a1a2e",
+              edgecolor="white", labelcolor="white")
+    ax.grid(axis="y", alpha=0.15, color="white")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#555")
+    ax.spines["bottom"].set_color("#555")
+
+    plt.tight_layout()
+    out_path: Path = _PROJECT / "results" / "baseline_vs_model.png"
+    out_path.parent.mkdir(exist_ok=True)
+    fig.savefig(str(out_path), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     print(f"  Saved → {out_path}")
     plt.close(fig)
 
@@ -375,17 +512,22 @@ def weight_sensitivity_analysis() -> None:
             delay = 1.0 - float(np.clip(avg_speed, 0.0, 13.9)) / 13.9
             return -(_w1 * queue + _w2 * wait + _w3 * delay)
 
+        import time as _time
+        _time.sleep(1)  # brief pause to let previous TraCI port close
+
         env = SumoEnvironment(
             net_file=_NET,
             route_file=_ROUTE,
-            num_seconds=3600,
-            delta_time=5,
+            num_seconds=_SIM_SECONDS,
+            delta_time=_DELTA_TIME,
             min_green=10,
             max_green=60,
             use_gui=False,
             reward_fn=patched_reward,
             observation_class=CNPlusObservation,
             sumo_warnings=False,
+            time_to_teleport=300,
+            additional_sumo_cmd=f"-a {_ADD}",
         )
         agents = MultiAgentLinearAC(env)
         agents.load_all(str(_PROJECT / "weights"))
@@ -396,7 +538,9 @@ def weight_sensitivity_analysis() -> None:
         truncated  = {a: False for a in env.ts_ids}
         ep_q, ep_w, ep_d = [], [], []
 
-        while not all(terminated.values()) and not all(truncated.values()):
+        step = 0
+        while step < _MAX_STEPS:
+            step += 1
             actions = agents.act(obs)
             step_res = env.step(actions)
             if len(step_res) == 5:
@@ -404,6 +548,14 @@ def weight_sensitivity_analysis() -> None:
             else:
                 next_obs, _, dones, info = step_res
                 terminated = truncated = dones
+            done_all = (
+                terminated.get("__all__", False)
+                or truncated.get("__all__", False)
+                or all(terminated.get(a, False) for a in env.ts_ids)
+                or all(truncated.get(a, False) for a in env.ts_ids)
+            )
+            if done_all:
+                break
             if "system_total_stopped"     in info: ep_q.append(float(info["system_total_stopped"]))
             if "system_mean_waiting_time" in info: ep_w.append(float(info["system_mean_waiting_time"]))
             if "system_mean_speed"        in info:
@@ -411,7 +563,7 @@ def weight_sensitivity_analysis() -> None:
                 ep_d.append(1.0 - min(spd / 13.9, 1.0))
             obs = next_obs
 
-        env.close()
+        _safe_close(env)
 
         result = {
             "name":  name,
@@ -473,10 +625,11 @@ def main() -> None:
         num_seconds=3600, delta_time=5,
         min_green=45, max_green=45,
         use_gui=False, sumo_warnings=False,
+        time_to_teleport=300,
         additional_sumo_cmd=f"-a {_ADD}",
     )
     ft_q, ft_w, ft_d = _episode_series(ft_env)
-    ft_env.close()
+    _safe_close(ft_env)
     ft_results = {"queue": float(np.mean(ft_q)) if ft_q else 0.0,
                   "wait":  float(np.mean(ft_w)) if ft_w else 0.0,
                   "delay": float(np.mean(ft_d)) if ft_d else 0.0}
@@ -488,16 +641,18 @@ def main() -> None:
         num_seconds=3600, delta_time=5,
         min_green=5, max_green=60,
         use_gui=False, sumo_warnings=False,
+        time_to_teleport=300,
         additional_sumo_cmd=f"-a {_ADD}",
     )
     at_q, at_w, at_d = _episode_series(at_env)
-    at_env.close()
+    _safe_close(at_env)
     at_results = {"queue": float(np.mean(at_q)) if at_q else 0.0,
                   "wait":  float(np.mean(at_w)) if at_w else 0.0,
                   "delay": float(np.mean(at_d)) if at_d else 0.0}
 
-    # ── Section 3: comparison plot ─────────────────────────────────────────────
+    # ── Section 3: comparison plots ────────────────────────────────────────────
     plot_comparison(ac_q, ac_w, ac_d, ft_q, ft_w, ft_d, at_q, at_w, at_d)
+    plot_baseline_vs_model(ft=ft_results, at=at_results, ac=ac_results)
 
     # ── Section 4: results table ───────────────────────────────────────────────
     print_results_table(ft=ft_results, at=at_results, ac=ac_results)
